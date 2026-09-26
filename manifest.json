@@ -1,0 +1,15 @@
+{
+  "name": "Farm Chores",
+  "short_name": "Chores",
+  "description": "Daily farm chore checklist",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4eedf",
+  "theme_color": "#f4eedf",
+  "icons": [
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
