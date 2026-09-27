@@ -204,6 +204,11 @@ label.field{display:block;font-weight:800;margin-bottom:6px}
 .hookres code{display:block;font-weight:500;font-size:13px;margin-top:4px;white-space:pre-wrap;opacity:.9}
 .pending{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:15px;font-weight:700;color:var(--warn)}
 .pending span{flex:1}
+.adv{margin-top:14px;border-top:1px solid var(--line);padding-top:4px}
+.adv summary{min-height:48px;display:flex;align-items:center;font-weight:800;font-size:16px;color:var(--muted);cursor:pointer;list-style:none}
+.adv summary::-webkit-details-marker{display:none}
+.adv summary::before{content:"›";display:inline-block;width:18px;font-size:20px;transition:transform .2s}
+.adv[open] summary::before{transform:rotate(90deg)}
 
 /* Tab bar */
 nav{
@@ -338,18 +343,7 @@ nav button[aria-selected=true]{color:var(--barn)}
     </div>
     <div class="card" id="hookCard">
       <h2>🤝 Connect to Farmhand</h2>
-      <p class="note" style="margin-top:0">Paste the webhook URL and sender key from Farmhand's Chores app check-ins routine.</p>
-      <div class="fld">
-        <label class="field" for="hookUrl">Webhook URL</label>
-        <input type="url" id="hookUrl" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…">
-      </div>
-      <div class="fld">
-        <label class="field" for="hookKey">Sender key</label>
-        <div class="keyrow">
-          <input type="password" id="hookKey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste key">
-          <button class="btn" id="hookKeyShow" aria-pressed="false">Show</button>
-        </div>
-      </div>
+      <p class="note" style="margin-top:0">Sends your finished lists to Farmhand automatically.</p>
       <div class="tog">
         <label class="tl" for="hookOn">Tell Farmhand automatically<span id="hookOnHint">When a list is all done or bulk feed is done</span></label>
         <input type="checkbox" role="switch" class="switch" id="hookOn">
@@ -358,6 +352,22 @@ nav button[aria-selected=true]{color:var(--barn)}
       <div class="hookres" id="hookResult" role="status" hidden></div>
       <p class="note" id="hookLast"></p>
       <div class="pending" id="hookPending" hidden><span id="hookPendingText"></span><button class="btn sm" id="hookRetry">Retry now</button></div>
+      <details class="adv" id="hookAdv">
+        <summary>Advanced: custom webhook</summary>
+        <p class="note">Leave blank to use Farmhand's built-in relay. If a URL is filled in, updates go there instead.</p>
+        <div class="fld">
+          <label class="field" for="hookUrl">Webhook URL</label>
+          <input type="url" id="hookUrl" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…">
+        </div>
+        <div class="fld">
+          <label class="field" for="hookKey">Sender key <span class="muted" style="font-weight:500">(optional)</span></label>
+          <div class="keyrow">
+            <input type="password" id="hookKey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste key">
+            <button class="btn" id="hookKeyShow" aria-pressed="false">Show</button>
+          </div>
+        </div>
+      </details>
+      <p class="note" id="hookDest"></p>
     </div>
     <div class="card">
       <h2>Backup</h2>
@@ -940,37 +950,52 @@ nav button[aria-selected=true]{color:var(--barn)}
   sortLog();
   render();
 
-  // ---------- Farmhand webhook ----------
-  // Stored separately from chore data so CSV/clear-all never touch it. Nothing is hardcoded: URL + key live only on this phone.
+  // ---------- Farmhand connection ----------
+  // Default: Farmhand's ntfy.sh relay topic (low-sensitivity, intentionally public). ntfy allows cross-origin
+  // POSTs, so a plain text/plain POST (a CORS "simple request", no preflight) returns a readable JSON reply.
+  // Optional custom webhook (Advanced) keeps the earlier auth-guessing logic. Stored separately from chore data.
+  var RELAY_URL = "https://ntfy.sh/farmhand-greg-8c3d50dadb17b096";
   var HKEY = "farmChores.hook.v1", QMAX_AGE = 3 * 864e5, TIMEOUT = 15000;
   var LISTOUT = { morning:"morning", evening:"evening", saturday:"deepclean" };
   function hLoad(){
     var h = null; try{ h = JSON.parse(localStorage.getItem(HKEY) || "null"); }catch(e){}
     if (!h || typeof h !== "object") h = {};
     h.url = typeof h.url === "string" ? h.url : ""; h.key = typeof h.key === "string" ? h.key : "";
-    h.enabled = !!h.enabled; h.style = h.style === "nocors" ? "nocors" : "cors";
+    if (h.v !== 3){ h.v = 3; h.enabled = true; }           // relay version: default ON for everyone
+    h.enabled = h.enabled !== false;
+    if (!h.styles || typeof h.styles !== "object") h.styles = {};
     if (!h.sent || typeof h.sent !== "object") h.sent = {};
     if (!Array.isArray(h.queue)) h.queue = [];
+    delete h.style;
     return h;
   }
   var hook = hLoad();
   function hSave(){ try{ localStorage.setItem(HKEY, JSON.stringify(hook)); }catch(e){} }
-  function hReady(){ return !!(hook.url && hook.key); }
-  function hActive(){ return hook.enabled && hReady(); }
+  function dest(){
+    return hook.url ? { kind:"custom", url:hook.url, key:hook.key } : { kind:"relay", url:RELAY_URL, key:"" };
+  }
+  function hActive(){ return hook.enabled; }
   function validUrl(u){ try{ var x = new window.URL(u); return x.protocol === "https:" || x.protocol === "http:"; }catch(e){ return false; } }
+  function clip(s, n){ s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
   function payloadList(k, l){
     var L = data.lists[l], c = checks(k, l), s = stats(k, l), r = data.days[k];
     var p = { source:"farm-chores-app", event:"list_complete", list:LISTOUT[l], date:k, completedAt:new Date(s.at || Date.now()).toISOString(),
-      done:s.done, total:s.total, tasks:L.tasks.filter(function(t){ return c[t.id]; }).map(function(t){ return t.text; }) };
-    if (r && r.note && r.note.trim()) p.note = r.note.trim();
+      done:s.done, total:s.total, tasks:L.tasks.filter(function(t){ return c[t.id]; }).map(function(t){ return clip(t.text, 120); }) };
+    if (r && r.note && r.note.trim()) p.note = clip(r.note.trim(), 1500); // ntfy turns >4 KB bodies into attachments
     return p;
   }
   function payloadBulk(k){
     var p = { source:"farm-chores-app", event:"bulk_feed_done", date:k, completedAt:new Date().toISOString(), done:1, total:1,
       tasks:["Bulk feed chickens & turkeys"], nextDue:addDays(k, data.bulk.every) };
-    var r = data.days[k]; if (r && r.note && r.note.trim()) p.note = r.note.trim();
+    var r = data.days[k]; if (r && r.note && r.note.trim()) p.note = clip(r.note.trim(), 1500);
     return p;
+  }
+  function titleFor(p){
+    var d = fmt(p.date, { month:"short", day:"numeric" });
+    if (p.event === "list_complete") return ({ morning:"Morning", evening:"Evening", deepclean:"Deep clean" }[p.list] || p.list) + " chores done - " + d;
+    if (p.event === "bulk_feed_done") return "Bulk feed done - " + d;
+    return "Farm Chores test";
   }
   // Queue an event at most once per dedupe id (list+date / bulk+date). Never blocks: network happens later.
   function notify(dedupe, build){
@@ -979,7 +1004,7 @@ nav button[aria-selected=true]{color:var(--barn)}
     var now = Date.now();
     Object.keys(hook.sent).forEach(function(k){ if (now - hook.sent[k] > 60 * 864e5) delete hook.sent[k]; });
     hook.sent[dedupe] = now;
-    hook.queue.push({ id:dedupe, created:Date.now(), tries:0, payload:build() });
+    hook.queue.push({ id:dedupe, created:now, tries:0, payload:build() });
     hSave(); setTimeout(flushQueue, 0); renderHook();
     return true;
   }
@@ -992,21 +1017,33 @@ nav button[aria-selected=true]{color:var(--barn)}
       p.then(function(v){ clearTimeout(t); res(v); }, function(e){ clearTimeout(t); rej(e); });
     });
   }
-  function attempt(style, payload){
-    var body = JSON.stringify(Object.assign({}, payload, { key:hook.key }));
-    if (style === "cors"){
-      return withTimeout(fetch(hook.url, { method:"POST", mode:"cors", cache:"no-store", credentials:"omit", body:body,
-        headers:{ "Content-Type":"application/json", "Authorization":"Bearer " + hook.key, "X-Webhook-Key":hook.key } }))
-        .then(function(res){
-          return res.text().catch(function(){ return ""; }).then(function(txt){
-            return { style:"cors", status:res.status, ok:res.ok, text:(txt || "").replace(/\s+/g, " ").trim().slice(0, 160) };
-          });
-        });
+  function readReply(res){
+    return res.text().catch(function(){ return ""; }).then(function(txt){
+      var o = null; try{ o = JSON.parse(txt); }catch(e){}
+      if (res.ok && o && o.id && o.event === "message") txt = "Relay message id: " + o.id; // ntfy publish reply
+      return { style:"cors", status:res.status, ok:res.ok, text:(txt || "").replace(/\s+/g, " ").trim().slice(0, 160) };
+    });
+  }
+  function attempt(D, style, payload){
+    var opts = { method:"POST", cache:"no-store", credentials:"omit" };
+    if (D.kind === "relay"){
+      // No key, no custom headers. Title goes in ntfy's ?title= param so the request stays preflight-free.
+      var u = new window.URL(D.url); u.searchParams.set("title", titleFor(payload));
+      opts.body = JSON.stringify(payload); opts.headers = { "Content-Type":"text/plain" };
+      opts.mode = style === "cors" ? "cors" : "no-cors";
+      var f = withTimeout(fetch(u.toString(), opts));
+      return style === "cors" ? f.then(readReply) : f.then(function(){ return { style:"nocors", ok:true, unconfirmed:true }; });
     }
-    var u = new window.URL(hook.url); u.searchParams.set("key", hook.key);
-    return withTimeout(fetch(u.toString(), { method:"POST", mode:"no-cors", cache:"no-store", credentials:"omit", body:body,
-      headers:{ "Content-Type":"text/plain" } }))
-      .then(function(){ return { style:"nocors", ok:true, unconfirmed:true }; });
+    var withKey = D.key ? Object.assign({}, payload, { key:D.key }) : payload;
+    opts.body = JSON.stringify(withKey);
+    if (style === "cors"){
+      opts.mode = "cors"; opts.headers = { "Content-Type":"application/json" };
+      if (D.key){ opts.headers["Authorization"] = "Bearer " + D.key; opts.headers["X-Webhook-Key"] = D.key; }
+      return withTimeout(fetch(D.url, opts)).then(readReply);
+    }
+    var u2 = new window.URL(D.url); if (D.key) u2.searchParams.set("key", D.key);
+    opts.mode = "no-cors"; opts.headers = { "Content-Type":"text/plain" };
+    return withTimeout(fetch(u2.toString(), opts)).then(function(){ return { style:"nocors", ok:true, unconfirmed:true }; });
   }
   function errWords(e){
     if (!e) return "Unknown error";
@@ -1014,17 +1051,16 @@ nav button[aria-selected=true]{color:var(--barn)}
     if (e.name === "TypeError") return navigator.onLine === false ? "No internet connection (phone is offline)" : "Network/CORS failure — couldn't reach the server, or it blocks requests from web apps";
     return (e.name || "Error") + ": " + (e.message || "");
   }
-  // Try the remembered style first; on a network/CORS TypeError fall back once to the other style.
+  // Try the remembered style for this destination first; on a network/CORS TypeError fall back once to the other.
   function deliver(payload, preferCors){
-    if (!validUrl(hook.url)) return Promise.resolve({ ok:false, error:"That webhook URL doesn't look right (should start with https://)" });
-    var first = preferCors ? "cors" : hook.style, second = first === "cors" ? "nocors" : "cors";
-    return attempt(first, payload).catch(function(e){
-      if (e && e.name === "TypeError" && !(first === "nocors" && navigator.onLine === false)){
-        return attempt(second, payload).catch(function(e2){ throw e2; });
-      }
+    var D = dest();
+    if (!validUrl(D.url)) return Promise.resolve({ ok:false, error:"That webhook URL doesn't look right (should start with https://)" });
+    var first = preferCors ? "cors" : (hook.styles[D.url] === "nocors" ? "nocors" : "cors"), second = first === "cors" ? "nocors" : "cors";
+    return attempt(D, first, payload).catch(function(e){
+      if (e && e.name === "TypeError" && navigator.onLine !== false) return attempt(D, second, payload);
       throw e;
     }).then(function(r){
-      if (r.style === "nocors" || r.ok || r.status) { hook.style = r.style; }
+      hook.styles[D.url] = r.style;
       return r;
     }, function(e){ return { ok:false, error:errWords(e) }; });
   }
@@ -1039,15 +1075,15 @@ nav button[aria-selected=true]{color:var(--barn)}
   function recordLast(p, r){
     hook.last = { at:Date.now(), what:describe(p), result:resultText(r), text:r.text || "", ok:!!r.ok, unconfirmed:!!r.unconfirmed };
   }
+  function keepStyles(){ var st = hook.styles; hook = hLoad(); Object.assign(hook.styles, st); }
   var flushing = false, flushAgain = false;
   function flushQueue(){
     if (flushing){ flushAgain = true; return; }
     hook = hLoad();
-    var now = Date.now();
-    var before = hook.queue.length;
+    var now = Date.now(), before = hook.queue.length;
     hook.queue = hook.queue.filter(function(q){ return q && q.payload && now - q.created < QMAX_AGE; });
     if (hook.queue.length !== before) hSave();
-    if (!hReady() || !hook.queue.length){ renderHook(); return; }
+    if (!hook.queue.length){ renderHook(); return; }
     flushing = true;
     var items = hook.queue.slice();
     (function next(i){
@@ -1058,7 +1094,7 @@ nav button[aria-selected=true]{color:var(--barn)}
       }
       var item = items[i];
       deliver(item.payload, false).then(function(r){
-        var fresh = hLoad(); fresh.style = hook.style; hook = fresh; // keep edits made meanwhile (url/key/new items)
+        keepStyles(); // re-read so edits made meanwhile (url/key/new items) aren't lost
         recordLast(item.payload, r);
         if (r.ok) hook.queue = hook.queue.filter(function(q){ return q.id !== item.id; });
         else hook.queue.forEach(function(q){ if (q.id === item.id){ q.tries++; q.lastError = resultText(r); } });
@@ -1071,52 +1107,47 @@ nav button[aria-selected=true]{color:var(--barn)}
     if (!$("hookUrl")) return;
     if (document.activeElement !== $("hookUrl")) $("hookUrl").value = hook.url;
     if (document.activeElement !== $("hookKey")) $("hookKey").value = hook.key;
-    var ready = hReady();
-    $("hookOn").disabled = !ready;
+    if (hook.url && !$("hookAdv").open && !$("hookAdv").dataset.touched) $("hookAdv").open = true;
     $("hookOn").checked = hActive();
-    $("hookOnHint").textContent = ready ? "When a list is all done or bulk feed is done" : "Fill in both fields first";
-    $("hookTest").disabled = !ready;
+    $("hookOnHint").textContent = hActive() ? "When a list is all done or bulk feed is done" : "Off — Farmhand won't be told";
     var L = hook.last;
     $("hookLast").textContent = L ? "Last sent: " + new Date(L.at).toLocaleString(undefined, { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) +
-      " · " + L.what + " · " + L.result + (L.text ? " — " + L.text.slice(0, 80) : "") : "Last sent: nothing yet";
+      " · " + L.what + " · " + L.result + (L.text && !/^Relay message id/.test(L.text) ? " — " + L.text.slice(0, 80) : "") : "Last sent: nothing yet";
     var n = hook.queue.length;
     $("hookPending").hidden = !n;
     $("hookPendingText").textContent = n + " update" + (n === 1 ? "" : "s") + " waiting to send — will retry automatically";
+    $("hookDest").textContent = hook.url ? "Sending to your custom webhook." : "Sending to Farmhand's built-in relay.";
   }
   function showResult(r){
     var el = $("hookResult");
     el.hidden = false;
     el.className = "hookres " + (r.ok && !r.unconfirmed ? "good" : r.unconfirmed ? "meh" : "bad");
-    el.textContent = resultText(r);
+    el.textContent = resultText(r) + (r.ok && !r.unconfirmed && dest().kind === "relay" ? " — Farmhand's relay got it" : "");
     if (r.text){ var c = document.createElement("code"); c.textContent = "Reply: " + r.text; el.appendChild(c); }
     else if (r.status){ var c2 = document.createElement("code"); c2.textContent = "(empty reply)"; el.appendChild(c2); }
   }
-  $("hookUrl").addEventListener("input", function(){
-    var was = hReady(); hook = hLoad(); hook.url = this.value.trim();
-    if (!was && hReady()) hook.enabled = true; hSave(); renderHook();
-  });
-  $("hookKey").addEventListener("input", function(){
-    var was = hReady(); hook = hLoad(); hook.key = this.value.trim();
-    if (!was && hReady()) hook.enabled = true; hSave(); renderHook();
-  });
+  $("hookAdv").addEventListener("toggle", function(){ this.dataset.touched = "1"; });
+  $("hookUrl").addEventListener("input", function(){ hook = hLoad(); hook.url = this.value.trim(); hSave(); renderHook(); });
+  $("hookKey").addEventListener("input", function(){ hook = hLoad(); hook.key = this.value.trim(); hSave(); renderHook(); });
   $("hookKeyShow").addEventListener("click", function(){
     var k = $("hookKey"), show = k.type === "password";
     k.type = show ? "text" : "password"; this.textContent = show ? "Hide" : "Show"; this.setAttribute("aria-pressed", String(show));
   });
-  $("hookOn").addEventListener("change", function(){ hook = hLoad(); hook.enabled = this.checked && hReady(); hSave(); renderHook(); if (hook.enabled) flushQueue(); });
+  $("hookOn").addEventListener("change", function(){ hook = hLoad(); hook.enabled = this.checked; hSave(); renderHook(); if (hook.enabled) flushQueue(); });
+  function sendTest(note){
+    hook = hLoad();
+    var p = { source:"farm-chores-app", event:"test", date:todayKey(), completedAt:new Date().toISOString(), done:0, total:0, tasks:[], note:note || "Test from the Farm Chores app" };
+    return deliver(p, true).then(function(r){
+      keepStyles(); recordLast(p, r); hSave(); renderHook();
+      if (r.ok) flushQueue();
+      return r;
+    });
+  }
   $("hookTest").addEventListener("click", function(){
-    var btn = this; hook = hLoad();
-    if (!hReady()) return;
+    var btn = this;
     btn.disabled = true; btn.textContent = "Sending…";
     var el = $("hookResult"); el.hidden = false; el.className = "hookres"; el.textContent = "Sending test…";
-    var p = { source:"farm-chores-app", event:"test", date:todayKey(), completedAt:new Date().toISOString(), done:0, total:0, tasks:[], note:"Test from the Farm Chores app" };
-    deliver(p, true).then(function(r){
-      var st = hook.style; hook = hLoad(); hook.style = st;
-      recordLast(p, r); hSave();
-      btn.disabled = false; btn.textContent = "Send test";
-      showResult(r); renderHook();
-      if (r.ok) flushQueue();
-    });
+    sendTest().then(function(r){ btn.disabled = false; btn.textContent = "Send test"; showResult(r); });
   });
   $("hookRetry").addEventListener("click", flushQueue);
   window.addEventListener("online", flushQueue);
@@ -1130,7 +1161,7 @@ nav button[aria-selected=true]{color:var(--barn)}
   }
 
   // test hook
-  window.__chores = { hook:function(){ return hLoad(); }, flush:flushQueue, todayKey:todayKey, addDays:addDays, toCSV:toCSV, bulkStatus:bulkStatus, streak:streak, sel:function(){ return sel; } };
+  window.__chores = { hook:function(){ return hLoad(); }, flush:flushQueue, sendTest:sendTest, todayKey:todayKey, addDays:addDays, toCSV:toCSV, bulkStatus:bulkStatus, streak:streak, sel:function(){ return sel; } };
 })();
 </script>
 </body>

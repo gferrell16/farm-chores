@@ -1,5 +1,5 @@
 // Offline cache for Farm Chores. Network-first for the page so updates arrive; cache fallback when offline.
-var CACHE = "farm-chores-v2";
+var CACHE = "farm-chores-v3";
 var ASSETS = ["./", "./index.html", "./manifest.json", "./apple-touch-icon.png", "./icon-512.png"];
 self.addEventListener("install", function(e){
   e.waitUntil(caches.open(CACHE).then(function(c){ return c.addAll(ASSETS); }).then(function(){ return self.skipWaiting(); }));
