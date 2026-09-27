@@ -137,7 +137,7 @@ h2{font-size:21px;margin:2px 0 8px;font-weight:800}
 .btn.outline-danger{color:var(--danger);border-color:var(--danger);background:transparent}
 .btn.wide{width:100%}
 .btn.sm{min-height:44px;font-size:16px;padding:0 12px}
-input[type=date],input[type=number],input[type=text],select,textarea{
+input[type=date],input[type=number],input[type=text],input[type=url],input[type=password],select,textarea{
   min-height:56px;border-radius:14px;border:2px solid var(--line);background:var(--bg);padding:0 12px;font-size:18px;
 }
 input[type=date]{flex:1;min-width:0}
@@ -182,6 +182,28 @@ label.field{display:block;font-weight:800;margin-bottom:6px}
 .inline{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .inline select,.inline input{width:auto}
 .inline input[type=number]{width:96px;text-align:center}
+
+/* Farmhand connect */
+.fld{margin-top:12px}
+.fld input{width:100%}
+.keyrow{display:flex;gap:8px}
+.keyrow input{flex:1;min-width:0}
+.keyrow .btn{flex:none;min-width:84px}
+.tog{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 12px}
+.tog .tl{font-weight:800}
+.tog .tl span{display:block;font-weight:500;font-size:15px;color:var(--muted)}
+.switch{appearance:none;-webkit-appearance:none;flex:none;width:64px;height:38px;border-radius:999px;background:var(--line);position:relative;margin:0;cursor:pointer;transition:background-color .2s}
+.switch::after{content:"";position:absolute;top:4px;left:4px;width:30px;height:30px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .2s}
+.switch:checked{background:var(--accent)}
+.switch:checked::after{transform:translateX(26px)}
+.switch:disabled{opacity:.45;cursor:default}
+.hookres{margin-top:10px;border-radius:14px;padding:10px 12px;font-size:15px;font-weight:700;background:var(--bg);word-break:break-word}
+.hookres.good{background:var(--accent-soft);color:var(--ink);box-shadow:inset 0 0 0 2px var(--accent)}
+.hookres.meh{background:var(--warn-soft);box-shadow:inset 0 0 0 2px var(--warn)}
+.hookres.bad{background:color-mix(in srgb,var(--danger) 12%,var(--card));box-shadow:inset 0 0 0 2px var(--danger)}
+.hookres code{display:block;font-weight:500;font-size:13px;margin-top:4px;white-space:pre-wrap;opacity:.9}
+.pending{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:15px;font-weight:700;color:var(--warn)}
+.pending span{flex:1}
 
 /* Tab bar */
 nav{
@@ -313,6 +335,29 @@ nav button[aria-selected=true]{color:var(--barn)}
         <label for="bulkEvery"><strong>Bulk feed every</strong><br><span class="muted" style="font-size:15px">days (chickens &amp; turkeys)</span></label>
         <input type="number" id="bulkEvery" inputmode="numeric" min="1" max="365" step="1">
       </div>
+    </div>
+    <div class="card" id="hookCard">
+      <h2>🤝 Connect to Farmhand</h2>
+      <p class="note" style="margin-top:0">Paste the webhook URL and sender key from Farmhand's Chores app check-ins routine.</p>
+      <div class="fld">
+        <label class="field" for="hookUrl">Webhook URL</label>
+        <input type="url" id="hookUrl" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…">
+      </div>
+      <div class="fld">
+        <label class="field" for="hookKey">Sender key</label>
+        <div class="keyrow">
+          <input type="password" id="hookKey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste key">
+          <button class="btn" id="hookKeyShow" aria-pressed="false">Show</button>
+        </div>
+      </div>
+      <div class="tog">
+        <label class="tl" for="hookOn">Tell Farmhand automatically<span id="hookOnHint">When a list is all done or bulk feed is done</span></label>
+        <input type="checkbox" role="switch" class="switch" id="hookOn">
+      </div>
+      <button class="btn primary wide" id="hookTest">Send test</button>
+      <div class="hookres" id="hookResult" role="status" hidden></div>
+      <p class="note" id="hookLast"></p>
+      <div class="pending" id="hookPending" hidden><span id="hookPendingText"></span><button class="btn sm" id="hookRetry">Retry now</button></div>
     </div>
     <div class="card">
       <h2>Backup</h2>
@@ -616,14 +661,16 @@ nav button[aria-selected=true]{color:var(--barn)}
     var b = e.target.closest("button"); if (!b || !editing) return;
     var k = editing;
     if (b.dataset.all || b.dataset.none){
-      var l = b.dataset.all || b.dataset.none, on = !!b.dataset.all;
+      var l = b.dataset.all || b.dataset.none, on = !!b.dataset.all, was = stats(k, l).full;
       data.lists[l].tasks.forEach(function(t){ setCheck(k, l, t.id, on); });
-      save(); render(); return;
+      save();
+      if (on && !was && stats(k, l).full) notifyList(k, l);
+      render(); return;
     }
     if (b.classList.contains("task")){
       var list = b.closest("ul").dataset.list, id = b.dataset.id, now = b.getAttribute("aria-pressed") !== "true";
-      if (list === "bulk"){ if (now) bulkMark(k); else bulkUnmark(k); }
-      else setCheck(k, list, id, now);
+      if (list === "bulk"){ if (now){ bulkMark(k); if (k === todayKey()) notifyBulk(k); } else bulkUnmark(k); }
+      else { var wasF = stats(k, list).full; setCheck(k, list, id, now); if (now && !wasF && stats(k, list).full) notifyList(k, list); }
       if (now){ justChecked = list + ":" + id; buzz(10); }
       save(); render();
     }
@@ -652,13 +699,15 @@ nav button[aria-selected=true]{color:var(--barn)}
     var k = currentDay, id = b.dataset.id, on = !isChecked(k, sel, id);
     var wasFull = stats(k, sel).full;
     setCheck(k, sel, id, on); save();
-    if (on){ justChecked = id; buzz(12); if (!wasFull && stats(k, sel).full){ celebrate = true; buzz([20, 60, 30]); } }
+    if (on){ justChecked = id; buzz(12); if (!wasFull && stats(k, sel).full){ celebrate = true; buzz([20, 60, 30]); notifyList(k, sel); } }
     render();
   });
   $("checkAll").addEventListener("click", function(){
-    var k = currentDay;
+    var k = currentDay, wasFull = stats(k, sel).full;
     data.lists[sel].tasks.forEach(function(t){ setCheck(k, sel, t.id, true); });
-    save(); celebrate = true; buzz([20, 60, 30]); render();
+    save(); celebrate = true; buzz([20, 60, 30]);
+    if (!wasFull && stats(k, sel).full) notifyList(k, sel);
+    render();
   });
   $("clearList").addEventListener("click", function(){
     var L = data.lists[sel];
@@ -672,7 +721,7 @@ nav button[aria-selected=true]{color:var(--barn)}
   $("bulkHead").addEventListener("click", function(){ bulkOpen = !bulkOpen; renderBulk(); });
   $("bulkDone").addEventListener("click", function(){
     var t = currentDay;
-    if (bulkStatus().state === "fed") bulkUnmark(t); else { bulkMark(t); buzz([20, 60, 30]); }
+    if (bulkStatus().state === "fed") bulkUnmark(t); else { bulkMark(t); buzz([20, 60, 30]); notifyBulk(t); }
     bulkOpen = false; $("bulkSetRow").classList.remove("show"); save(); render();
   });
   $("bulkSetToggle").addEventListener("click", function(){ $("bulkSetRow").classList.toggle("show"); });
@@ -680,7 +729,7 @@ nav button[aria-selected=true]{color:var(--barn)}
     var k = $("bulkDate").value;
     if (!isValidKey(k)){ alert("Pick a date first."); return; }
     if (k > todayKey()){ alert("That date is in the future."); return; }
-    bulkSetLast(k); bulkOpen = false; $("bulkSetRow").classList.remove("show"); save(); render();
+    bulkSetLast(k); if (k === todayKey()) notifyBulk(k); bulkOpen = false; $("bulkSetRow").classList.remove("show"); save(); render();
   });
 
   // ---------- settings ----------
@@ -891,13 +940,197 @@ nav button[aria-selected=true]{color:var(--barn)}
   sortLog();
   render();
 
+  // ---------- Farmhand webhook ----------
+  // Stored separately from chore data so CSV/clear-all never touch it. Nothing is hardcoded: URL + key live only on this phone.
+  var HKEY = "farmChores.hook.v1", QMAX_AGE = 3 * 864e5, TIMEOUT = 15000;
+  var LISTOUT = { morning:"morning", evening:"evening", saturday:"deepclean" };
+  function hLoad(){
+    var h = null; try{ h = JSON.parse(localStorage.getItem(HKEY) || "null"); }catch(e){}
+    if (!h || typeof h !== "object") h = {};
+    h.url = typeof h.url === "string" ? h.url : ""; h.key = typeof h.key === "string" ? h.key : "";
+    h.enabled = !!h.enabled; h.style = h.style === "nocors" ? "nocors" : "cors";
+    if (!h.sent || typeof h.sent !== "object") h.sent = {};
+    if (!Array.isArray(h.queue)) h.queue = [];
+    return h;
+  }
+  var hook = hLoad();
+  function hSave(){ try{ localStorage.setItem(HKEY, JSON.stringify(hook)); }catch(e){} }
+  function hReady(){ return !!(hook.url && hook.key); }
+  function hActive(){ return hook.enabled && hReady(); }
+  function validUrl(u){ try{ var x = new window.URL(u); return x.protocol === "https:" || x.protocol === "http:"; }catch(e){ return false; } }
+
+  function payloadList(k, l){
+    var L = data.lists[l], c = checks(k, l), s = stats(k, l), r = data.days[k];
+    var p = { source:"farm-chores-app", event:"list_complete", list:LISTOUT[l], date:k, completedAt:new Date(s.at || Date.now()).toISOString(),
+      done:s.done, total:s.total, tasks:L.tasks.filter(function(t){ return c[t.id]; }).map(function(t){ return t.text; }) };
+    if (r && r.note && r.note.trim()) p.note = r.note.trim();
+    return p;
+  }
+  function payloadBulk(k){
+    var p = { source:"farm-chores-app", event:"bulk_feed_done", date:k, completedAt:new Date().toISOString(), done:1, total:1,
+      tasks:["Bulk feed chickens & turkeys"], nextDue:addDays(k, data.bulk.every) };
+    var r = data.days[k]; if (r && r.note && r.note.trim()) p.note = r.note.trim();
+    return p;
+  }
+  // Queue an event at most once per dedupe id (list+date / bulk+date). Never blocks: network happens later.
+  function notify(dedupe, build){
+    hook = hLoad();
+    if (!hActive() || hook.sent[dedupe]) return false;
+    var now = Date.now();
+    Object.keys(hook.sent).forEach(function(k){ if (now - hook.sent[k] > 60 * 864e5) delete hook.sent[k]; });
+    hook.sent[dedupe] = now;
+    hook.queue.push({ id:dedupe, created:Date.now(), tries:0, payload:build() });
+    hSave(); setTimeout(flushQueue, 0); renderHook();
+    return true;
+  }
+  function notifyList(k, l){ return notify("list:" + LISTOUT[l] + ":" + k, function(){ return payloadList(k, l); }); }
+  function notifyBulk(k){ return notify("bulk:" + k, function(){ return payloadBulk(k); }); }
+
+  function withTimeout(p){
+    return new Promise(function(res, rej){
+      var t = setTimeout(function(){ var e = new Error("timeout"); e.name = "TimeoutError"; rej(e); }, TIMEOUT);
+      p.then(function(v){ clearTimeout(t); res(v); }, function(e){ clearTimeout(t); rej(e); });
+    });
+  }
+  function attempt(style, payload){
+    var body = JSON.stringify(Object.assign({}, payload, { key:hook.key }));
+    if (style === "cors"){
+      return withTimeout(fetch(hook.url, { method:"POST", mode:"cors", cache:"no-store", credentials:"omit", body:body,
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer " + hook.key, "X-Webhook-Key":hook.key } }))
+        .then(function(res){
+          return res.text().catch(function(){ return ""; }).then(function(txt){
+            return { style:"cors", status:res.status, ok:res.ok, text:(txt || "").replace(/\s+/g, " ").trim().slice(0, 160) };
+          });
+        });
+    }
+    var u = new window.URL(hook.url); u.searchParams.set("key", hook.key);
+    return withTimeout(fetch(u.toString(), { method:"POST", mode:"no-cors", cache:"no-store", credentials:"omit", body:body,
+      headers:{ "Content-Type":"text/plain" } }))
+      .then(function(){ return { style:"nocors", ok:true, unconfirmed:true }; });
+  }
+  function errWords(e){
+    if (!e) return "Unknown error";
+    if (e.name === "TimeoutError") return "Timed out after " + (TIMEOUT / 1000) + " s — no answer from the server";
+    if (e.name === "TypeError") return navigator.onLine === false ? "No internet connection (phone is offline)" : "Network/CORS failure — couldn't reach the server, or it blocks requests from web apps";
+    return (e.name || "Error") + ": " + (e.message || "");
+  }
+  // Try the remembered style first; on a network/CORS TypeError fall back once to the other style.
+  function deliver(payload, preferCors){
+    if (!validUrl(hook.url)) return Promise.resolve({ ok:false, error:"That webhook URL doesn't look right (should start with https://)" });
+    var first = preferCors ? "cors" : hook.style, second = first === "cors" ? "nocors" : "cors";
+    return attempt(first, payload).catch(function(e){
+      if (e && e.name === "TypeError" && !(first === "nocors" && navigator.onLine === false)){
+        return attempt(second, payload).catch(function(e2){ throw e2; });
+      }
+      throw e;
+    }).then(function(r){
+      if (r.style === "nocors" || r.ok || r.status) { hook.style = r.style; }
+      return r;
+    }, function(e){ return { ok:false, error:errWords(e) }; });
+  }
+  function resultText(r){
+    if (r.unconfirmed) return "Sent (unconfirmed) — used the no-cors fallback, so the server's reply can't be read";
+    if (r.status) return (r.ok ? "✓ " : "✗ ") + "HTTP " + r.status + (r.ok ? " OK" : "");
+    return "✗ " + r.error;
+  }
+  function describe(p){
+    return p.event + (p.list ? " (" + p.list + ")" : "") + (p.event !== "test" && p.date !== todayKey() ? " for " + fmt(p.date, { month:"short", day:"numeric" }) : "");
+  }
+  function recordLast(p, r){
+    hook.last = { at:Date.now(), what:describe(p), result:resultText(r), text:r.text || "", ok:!!r.ok, unconfirmed:!!r.unconfirmed };
+  }
+  var flushing = false, flushAgain = false;
+  function flushQueue(){
+    if (flushing){ flushAgain = true; return; }
+    hook = hLoad();
+    var now = Date.now();
+    var before = hook.queue.length;
+    hook.queue = hook.queue.filter(function(q){ return q && q.payload && now - q.created < QMAX_AGE; });
+    if (hook.queue.length !== before) hSave();
+    if (!hReady() || !hook.queue.length){ renderHook(); return; }
+    flushing = true;
+    var items = hook.queue.slice();
+    (function next(i){
+      if (i >= items.length){
+        flushing = false; hSave(); renderHook();
+        if (flushAgain){ flushAgain = false; setTimeout(flushQueue, 0); }
+        return;
+      }
+      var item = items[i];
+      deliver(item.payload, false).then(function(r){
+        var fresh = hLoad(); fresh.style = hook.style; hook = fresh; // keep edits made meanwhile (url/key/new items)
+        recordLast(item.payload, r);
+        if (r.ok) hook.queue = hook.queue.filter(function(q){ return q.id !== item.id; });
+        else hook.queue.forEach(function(q){ if (q.id === item.id){ q.tries++; q.lastError = resultText(r); } });
+        hSave(); renderHook();
+        next(i + 1);
+      });
+    })(0);
+  }
+  function renderHook(){
+    if (!$("hookUrl")) return;
+    if (document.activeElement !== $("hookUrl")) $("hookUrl").value = hook.url;
+    if (document.activeElement !== $("hookKey")) $("hookKey").value = hook.key;
+    var ready = hReady();
+    $("hookOn").disabled = !ready;
+    $("hookOn").checked = hActive();
+    $("hookOnHint").textContent = ready ? "When a list is all done or bulk feed is done" : "Fill in both fields first";
+    $("hookTest").disabled = !ready;
+    var L = hook.last;
+    $("hookLast").textContent = L ? "Last sent: " + new Date(L.at).toLocaleString(undefined, { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) +
+      " · " + L.what + " · " + L.result + (L.text ? " — " + L.text.slice(0, 80) : "") : "Last sent: nothing yet";
+    var n = hook.queue.length;
+    $("hookPending").hidden = !n;
+    $("hookPendingText").textContent = n + " update" + (n === 1 ? "" : "s") + " waiting to send — will retry automatically";
+  }
+  function showResult(r){
+    var el = $("hookResult");
+    el.hidden = false;
+    el.className = "hookres " + (r.ok && !r.unconfirmed ? "good" : r.unconfirmed ? "meh" : "bad");
+    el.textContent = resultText(r);
+    if (r.text){ var c = document.createElement("code"); c.textContent = "Reply: " + r.text; el.appendChild(c); }
+    else if (r.status){ var c2 = document.createElement("code"); c2.textContent = "(empty reply)"; el.appendChild(c2); }
+  }
+  $("hookUrl").addEventListener("input", function(){
+    var was = hReady(); hook = hLoad(); hook.url = this.value.trim();
+    if (!was && hReady()) hook.enabled = true; hSave(); renderHook();
+  });
+  $("hookKey").addEventListener("input", function(){
+    var was = hReady(); hook = hLoad(); hook.key = this.value.trim();
+    if (!was && hReady()) hook.enabled = true; hSave(); renderHook();
+  });
+  $("hookKeyShow").addEventListener("click", function(){
+    var k = $("hookKey"), show = k.type === "password";
+    k.type = show ? "text" : "password"; this.textContent = show ? "Hide" : "Show"; this.setAttribute("aria-pressed", String(show));
+  });
+  $("hookOn").addEventListener("change", function(){ hook = hLoad(); hook.enabled = this.checked && hReady(); hSave(); renderHook(); if (hook.enabled) flushQueue(); });
+  $("hookTest").addEventListener("click", function(){
+    var btn = this; hook = hLoad();
+    if (!hReady()) return;
+    btn.disabled = true; btn.textContent = "Sending…";
+    var el = $("hookResult"); el.hidden = false; el.className = "hookres"; el.textContent = "Sending test…";
+    var p = { source:"farm-chores-app", event:"test", date:todayKey(), completedAt:new Date().toISOString(), done:0, total:0, tasks:[], note:"Test from the Farm Chores app" };
+    deliver(p, true).then(function(r){
+      var st = hook.style; hook = hLoad(); hook.style = st;
+      recordLast(p, r); hSave();
+      btn.disabled = false; btn.textContent = "Send test";
+      showResult(r); renderHook();
+      if (r.ok) flushQueue();
+    });
+  });
+  $("hookRetry").addEventListener("click", flushQueue);
+  window.addEventListener("online", flushQueue);
+  document.addEventListener("visibilitychange", function(){ if (!document.hidden) flushQueue(); });
+  renderHook();
+  setTimeout(flushQueue, 800);
+
   // ---------- offline ----------
   if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)){
     navigator.serviceWorker.register("sw.js").catch(function(){});
   }
 
   // test hook
-  window.__chores = { todayKey:todayKey, addDays:addDays, toCSV:toCSV, bulkStatus:bulkStatus, streak:streak, sel:function(){ return sel; } };
+  window.__chores = { hook:function(){ return hLoad(); }, flush:flushQueue, todayKey:todayKey, addDays:addDays, toCSV:toCSV, bulkStatus:bulkStatus, streak:streak, sel:function(){ return sel; } };
 })();
 </script>
 </body>
